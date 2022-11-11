@@ -1,0 +1,440 @@
+{
+  "Uuid": "608944af-ecd1-48a1-aa12-165928445b65",
+  "IsCustomNode": false,
+  "Description": null,
+  "Name": "MCP_A26_IK_FacadeCurves01",
+  "ElementResolver": {
+    "ResolutionMap": {}
+  },
+  "Inputs": [
+    {
+      "Id": "5d794608d6dc49e7a88e67356b09ca80",
+      "Name": "If you run the script again without changing any parameters, change value here",
+      "Type": "boolean",
+      "Value": "false",
+      "Description": "Selection between a true and false."
+    },
+    {
+      "Id": "577ce121b37a4f638c9f59dba798022e",
+      "Name": "Parameter name",
+      "Type": "string",
+      "Value": "Middle_Height",
+      "Description": "Creates a string."
+    },
+    {
+      "Id": "92f2b9025768454cb600b29499ec12ae",
+      "Name": "Curve height (relative to panel height)",
+      "Type": "number",
+      "Value": "0.3",
+      "MaximumValue": 1.0,
+      "MinimumValue": 0.01,
+      "StepValue": 0.01,
+      "NumberType": "Double",
+      "Description": "A slider that produces numeric values."
+    },
+    {
+      "Id": "f29b61cb3fce4c468b3cdd104df60410",
+      "Name": "Number of repetitions",
+      "Type": "number",
+      "Value": "5",
+      "MaximumValue": 20.0,
+      "MinimumValue": 1.0,
+      "StepValue": 1.0,
+      "NumberType": "Integer",
+      "Description": "A slider that produces integer values."
+    },
+    {
+      "Id": "26f704428a4b4713a3781afee5aa5561",
+      "Name": "Random shift each time",
+      "Type": "boolean",
+      "Value": "false",
+      "Description": "Selection between a true and false."
+    }
+  ],
+  "Outputs": [],
+  "Nodes": [
+    {
+      "ConcreteType": "PythonNodeModels.PythonNode, PythonNodeModels",
+      "NodeType": "PythonScriptNode",
+      "Code": "import sys\r\nimport clr\r\nimport random\r\nclr.AddReference('ProtoGeometry')\r\nclr.AddReference(\"RevitAPI\")\r\nclr.AddReference(\"RevitAPIUI\")\r\nfrom math import pi, degrees, sin\r\nfrom Autodesk.Revit.Creation import ItemFactoryBase\r\nimport Autodesk.DesignScript.Geometry as DS\r\nfrom Autodesk.Revit.DB import *\r\nfrom Autodesk.Revit.UI.Selection import *\r\nfrom Autodesk.Revit.UI import (TaskDialog, TaskDialogCommonButtons,TaskDialogCommandLinkId, TaskDialogResult)\r\nclr.AddReference(\"RevitServices\")\r\nfrom RevitServices.Persistence import DocumentManager\r\nfrom RevitServices.Transactions import TransactionManager\r\n\r\n### this script generates sine curve along the facade by changing the values of a selected parameter of Curtain panels.\r\n\r\nclass FloorSelectionFilter(ISelectionFilter):\r\n\t\"\"\"Selection filter that allows only elements with \"Floors\" category name\"\"\"\r\n\tdef __init__(self):\r\n\t\tpass\r\n\tdef AllowElement(self, element):\r\n\t\tif element.Category.Name == \"Floors\":\r\n\t\t\treturn True\r\n\t\telse:\r\n\t\t\treturn False\r\n\tdef AllowReference(self, element):\r\n\t\treturn False\r\n\r\n\r\ndef BboxScale(bbox, valueX, valueY, valueZ):\r\n\t\"\"\"\r\n\tEqually extends the BoundingBox by given distance in feet.\r\n\t0 will leave the BB dimension intact.\r\n\t\"\"\"\r\n\tbbox.Min = XYZ((bbox.Min.X - (valueX/2)), (bbox.Min.Y - (valueY/2)), (bbox.Min.Z - (valueZ/2)))\r\n\tbbox.Max = XYZ((bbox.Max.X + (valueX/2)), (bbox.Max.Y + (valueY/2)), (bbox.Max.Z + (valueZ/2)))\r\n\treturn bbox\r\n\r\n\r\ndef BboxMove(bbox, valueX, valueY, valueZ):\r\n\t\"\"\"Moves the BoundingBox by given distance in feet.\"\"\"\r\n\tbbox.Min = XYZ((bbox.Min.X + valueX), (bbox.Min.Y + valueY), (bbox.Min.Z + valueZ))\r\n\tbbox.Max = XYZ((bbox.Max.X + valueX), (bbox.Max.Y + valueY), (bbox.Max.Z + valueZ))\r\n\treturn bbox\r\n\r\n\r\ndef BBoxCenter(bbox):\r\n\t\"\"\"Calculates the centerpoint of given BoundingBox\"\"\"\r\n\tdX = (bbox.Min.X + bbox.Max.X) / 2\r\n\tdY = (bbox.Min.Y + bbox.Max.Y) / 2\r\n\tdZ = (bbox.Min.Z + bbox.Max.Z) / 2\r\n\treturn XYZ(dX, dY, dZ)\r\n\r\n\r\ndef SortPanels(floor, panels):\r\n\t\"\"\"\r\n\tSort Curtain Panels: creates set of lines from floor centerpoint to each panel centerpoint,\r\n\tsorts the panels based on 0-360° value\r\n\t\"\"\"\r\n\t# vectors need to be aligned to the plane, so their Z-point is aligned to the floor level height\r\n\tfloorLevel = doc.GetElement(floor.LevelId).ProjectElevation\r\n\r\n\tfloorCenter = BBoxCenter(floor.get_BoundingBox(None))\r\n\tfloorCenter = XYZ(floorCenter.X, floorCenter.Y, floorLevel)\r\n\tpanelCenters = [BBoxCenter(cp.get_BoundingBox(None)) for cp in panels] \r\n\tpanelCenters = [XYZ(pc.X, pc.Y, floorLevel) for pc in panelCenters]\r\n\t\r\n\tvectors = [Line.CreateBound(floorCenter, pc).Direction for pc in panelCenters]\r\n\tangles = [(degrees(v.AngleOnPlaneTo(XYZ(1,0,0), XYZ(0,0,1)))) for v in vectors]\r\n\tvalues = list(zip(panels, angles))\r\n\tsortedList = sorted(values, key = lambda angle: angle[1])\r\n\treturn [l[0] for l in sortedList]\r\n\r\n\r\ndef ReRange(min, max, inList):\r\n\t\"\"\"Re-mapping ranges to new Min and Max value. Output: new list\"\"\"\r\n\tnum = (len(inList) - 1)\r\n\tdelta = (max - min) / num\r\n\toutList = [min]\r\n\tfor x in range(num):\r\n\t\toutList.append(outList[-1] + delta)\r\n\treturn outList\r\n\r\n\r\ndef CreateCurve(rep, panelHeight, panelNumber):\r\n\t\"\"\"Creates Y values based on Sine curve with given parameters: amplitude, number of repetitions and number of panels\"\"\"\r\n\ta = (panelHeight / 2) * curveHeight\r\n\tc = random.randint(0, rep) if randomShift == True else 0\r\n\td = panelHeight / 2\r\n\tnum = ReRange(0, 2*pi, range(panelNumber))\r\n\treturn [(a * sin(rep * (x + c)) + d) for x in num]\r\n\r\n\r\ndoc = DocumentManager.Instance.CurrentDBDocument\r\nuiapp = DocumentManager.Instance.CurrentUIApplication \r\napp = uiapp.Application \r\nuidoc = uiapp.ActiveUIDocument\r\n\r\n#______INPUTS_______\r\nrefresh = IN[0] #bool just in case\r\ndOption = UnwrapElement(IN[1]) #OOTB design option node\r\nparameterName = IN[2] #string; parameter that controls vertical point of the curtain panel\r\ncurveHeight = IN[3] #float\r\ncurveNumber = IN[4] #int\r\nrandomShift = IN[5] #bool\r\n\r\nTaskDialog.Show(\"Floor selection\", \"Please select Floor element from this model\", TaskDialogCommonButtons.Ok)\r\n\r\n# selecting the floor from AP model\r\nif refresh == True or refresh == False:\r\n\tselFilter = FloorSelectionFilter()\r\n\tfloorRef = uidoc.Selection.PickObject(ObjectType.Element, selFilter, \"Select any Floor element from this model\")\r\n\tfloor = doc.GetElement(floorRef)\r\n\t\r\n# getting boundingbox of the floor, expanding it a bit and moving up, to make sure the curtain panels intersect with it\r\nbbox = floor.get_BoundingBox(None)\r\nbbox = BboxScale(bbox, 3, 3, 0)\r\nbbox = BboxMove(bbox, 0, 0, 3)\r\n\r\n# curtain panels in selected design option that intersect this boundingbox\r\nbbOutline = Outline(bbox.Min, bbox.Max)\r\nbbFilter = BoundingBoxIntersectsFilter(bbOutline)\r\ndOptFilter = ElementDesignOptionFilter(dOption.Id)\r\nfilter = LogicalAndFilter(bbFilter, dOptFilter)\r\nfloorPanels = FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_CurtainWallPanels).WherePasses(filter).ToElements()\r\n\r\npanelHeight = floorPanels[0].get_Parameter(BuiltInParameter.CURTAIN_WALL_PANELS_HEIGHT).AsDouble()\r\nsortedPanels = SortPanels(floor, floorPanels)\r\nyValues = CreateCurve(curveNumber, panelHeight, len(floorPanels))\r\n\r\nreport = []\r\nTransactionManager.Instance.EnsureInTransaction(doc)\r\nfor p, y in zip(sortedPanels, yValues):\r\n\ttry:\r\n\t\tparam = p.LookupParameter(parameterName)\r\n\t\tparam.Set(y)\r\n\t\treport.append(\"Changed value\")\r\n\texcept:\r\n\t\treport.append(\"Something went wrong\")\r\nTransactionManager.Instance.TransactionTaskDone()\r\n\r\n#_______OUTPUT________\r\nOUT = report",
+      "VariableInputPorts": true,
+      "Id": "8c099c2975d343de877ba51d9853ddfc",
+      "Inputs": [
+        {
+          "Id": "df74c755659f4b24939d3611b1edd9f0",
+          "Name": "IN[0]",
+          "Description": "Input #0",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "c4f954e8e6914e95b490157331efc9c9",
+          "Name": "IN[1]",
+          "Description": "Input #1",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "07917e2507e54e14aff6f33bf4bbed93",
+          "Name": "IN[2]",
+          "Description": "Input #2",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "a054486e9d80427e8ff6c94743f621bb",
+          "Name": "IN[3]",
+          "Description": "Input #3",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "c01df0d5ab59402298c35efeaaa159d1",
+          "Name": "IN[4]",
+          "Description": "Input #4",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "cb1938cc18744e6abb724fd1031880b2",
+          "Name": "IN[5]",
+          "Description": "Input #5",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "96354224904041139c9552e86d9bc661",
+          "Name": "OUT",
+          "Description": "Result of the python script",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Runs an embedded IronPython script."
+    },
+    {
+      "ConcreteType": "RhythmUI.DesignOptions, RhythmUI",
+      "SelectedIndex": 1,
+      "SelectedString": "Facade Option : Primary (primary)",
+      "NodeType": "ExtensionNode",
+      "Id": "7c648394667a44ed9b532464fdff1772",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "77f2d4fd388841ce8bca1e7557dc0039",
+          "Name": "DesignOption",
+          "Description": "The selected DesignOption",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Displays design options with option set for your use."
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.BoolSelector, CoreNodeModels",
+      "NodeType": "BooleanInputNode",
+      "InputValue": false,
+      "Id": "5d794608d6dc49e7a88e67356b09ca80",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "150cfb1214c94c21aba5138503349f7f",
+          "Name": "",
+          "Description": "Boolean",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Selection between a true and false."
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.StringInput, CoreNodeModels",
+      "NodeType": "StringInputNode",
+      "InputValue": "Middle_Height",
+      "Id": "577ce121b37a4f638c9f59dba798022e",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "f4f822940dff424096b1eb54421fba49",
+          "Name": "",
+          "Description": "String",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Creates a string."
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.DoubleSlider, CoreNodeModels",
+      "NodeType": "NumberInputNode",
+      "NumberType": "Double",
+      "MaximumValue": 1.0,
+      "MinimumValue": 0.01,
+      "StepValue": 0.01,
+      "InputValue": 0.3,
+      "Id": "92f2b9025768454cb600b29499ec12ae",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "fc0f73fce301421c9f49f72de9e02a26",
+          "Name": "",
+          "Description": "Double",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "A slider that produces numeric values."
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.IntegerSlider, CoreNodeModels",
+      "NodeType": "NumberInputNode",
+      "NumberType": "Integer",
+      "InputValue": 5,
+      "MaximumValue": 20,
+      "MinimumValue": 1,
+      "StepValue": 1,
+      "Id": "f29b61cb3fce4c468b3cdd104df60410",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "1f6db208a94e47a793a982e967f93755",
+          "Name": "",
+          "Description": "Int32",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "A slider that produces integer values."
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.BoolSelector, CoreNodeModels",
+      "NodeType": "BooleanInputNode",
+      "InputValue": false,
+      "Id": "26f704428a4b4713a3781afee5aa5561",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "19b1f87f76de490bb20271ba9606197f",
+          "Name": "",
+          "Description": "Boolean",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Selection between a true and false."
+    }
+  ],
+  "Connectors": [
+    {
+      "Start": "77f2d4fd388841ce8bca1e7557dc0039",
+      "End": "c4f954e8e6914e95b490157331efc9c9",
+      "Id": "b7358f9dc3724b869df3b5726d0ace57"
+    },
+    {
+      "Start": "150cfb1214c94c21aba5138503349f7f",
+      "End": "df74c755659f4b24939d3611b1edd9f0",
+      "Id": "5b83aee03f864cbcb6dd9d62021b62b2"
+    },
+    {
+      "Start": "f4f822940dff424096b1eb54421fba49",
+      "End": "07917e2507e54e14aff6f33bf4bbed93",
+      "Id": "cf245b1156fc47b3b2a0a6b666200dcf"
+    },
+    {
+      "Start": "fc0f73fce301421c9f49f72de9e02a26",
+      "End": "a054486e9d80427e8ff6c94743f621bb",
+      "Id": "98016196c34e4289bf5d5b55ec18ca49"
+    },
+    {
+      "Start": "1f6db208a94e47a793a982e967f93755",
+      "End": "c01df0d5ab59402298c35efeaaa159d1",
+      "Id": "14b21846512d4a2f98b73bf533d5f60f"
+    },
+    {
+      "Start": "19b1f87f76de490bb20271ba9606197f",
+      "End": "cb1938cc18744e6abb724fd1031880b2",
+      "Id": "7921f2e8d7c244c8803b59e17698b20f"
+    }
+  ],
+  "Dependencies": [],
+  "NodeLibraryDependencies": [
+    {
+      "Name": "Rhythm",
+      "Version": "2021.7.3",
+      "ReferenceType": "Package",
+      "Nodes": [
+        "7c648394667a44ed9b532464fdff1772"
+      ]
+    }
+  ],
+  "Bindings": [],
+  "View": {
+    "Dynamo": {
+      "ScaleFactor": 1.0,
+      "HasRunWithoutCrash": true,
+      "IsVisibleInDynamoLibrary": true,
+      "Version": "2.3.0.5885",
+      "RunType": "Manual",
+      "RunPeriod": "1000"
+    },
+    "Camera": {
+      "Name": "Background Preview",
+      "EyeX": -44.229530735694439,
+      "EyeY": 64.6269679580789,
+      "EyeZ": 117.56092893850578,
+      "LookX": 27.578261073864525,
+      "LookY": -29.876449496686533,
+      "LookZ": -133.29492852367846,
+      "UpX": 0.0,
+      "UpY": 1.0,
+      "UpZ": 0.0
+    },
+    "NodeViews": [
+      {
+        "ShowGeometry": true,
+        "Name": "Magic",
+        "Id": "8c099c2975d343de877ba51d9853ddfc",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "X": 230.30420717400523,
+        "Y": 270.77670130821764
+      },
+      {
+        "ShowGeometry": true,
+        "Name": "Design Option with curtain panels",
+        "Id": "7c648394667a44ed9b532464fdff1772",
+        "IsSetAsInput": true,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "X": -186.74756680617077,
+        "Y": 205.0
+      },
+      {
+        "ShowGeometry": true,
+        "Name": "If you run the script again without changing any parameters, change value here",
+        "Id": "5d794608d6dc49e7a88e67356b09ca80",
+        "IsSetAsInput": true,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "X": -383.17580447679256,
+        "Y": 139.40203647897476
+      },
+      {
+        "ShowGeometry": true,
+        "Name": "Parameter name",
+        "Id": "577ce121b37a4f638c9f59dba798022e",
+        "IsSetAsInput": true,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "X": 8.8835009108059921,
+        "Y": 301.30420717400517
+      },
+      {
+        "ShowGeometry": true,
+        "Name": "Curve height (relative to panel height)",
+        "Id": "92f2b9025768454cb600b29499ec12ae",
+        "IsSetAsInput": true,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "X": -171.1524630077584,
+        "Y": 373.5136273979524
+      },
+      {
+        "ShowGeometry": true,
+        "Name": "Number of repetitions",
+        "Id": "f29b61cb3fce4c468b3cdd104df60410",
+        "IsSetAsInput": true,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "X": -168.84825583375317,
+        "Y": 450.704567727126
+      },
+      {
+        "ShowGeometry": true,
+        "Name": "Random shift each time",
+        "Id": "26f704428a4b4713a3781afee5aa5561",
+        "IsSetAsInput": true,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "X": -31.747928980444783,
+        "Y": 524.439197295292
+      }
+    ],
+    "Annotations": [
+      {
+        "Id": "e8941f213bf3444eb629df82607fcdc4",
+        "Title": "Inputs",
+        "Nodes": [
+          "7c648394667a44ed9b532464fdff1772",
+          "5d794608d6dc49e7a88e67356b09ca80",
+          "577ce121b37a4f638c9f59dba798022e",
+          "92f2b9025768454cb600b29499ec12ae",
+          "f29b61cb3fce4c468b3cdd104df60410",
+          "26f704428a4b4713a3781afee5aa5561"
+        ],
+        "Left": -393.17580447679256,
+        "Top": 86.402036478974765,
+        "Width": 528.05930538759856,
+        "Height": 506.03716081631728,
+        "FontSize": 36.0,
+        "InitialTop": 139.40203647897476,
+        "InitialHeight": 530.03716081631728,
+        "TextblockHeight": 43.0,
+        "Background": "#FFC1D676"
+      },
+      {
+        "Id": "31617fb274934cc8a5a62f334af2505f",
+        "Title": "Developed by Ilia Krachkovskii\r\nTested on Revit 2020.2\r\n\r\nThis script changes values of curtain panels so they appear to have a curve on the surface. To use, check and set the values in the INPUT group and hit \"Run\". \r\nIf you need to run the script without changing any parameters, change the value in the first node.\r\n\r\nAdditional packages are not required.",
+        "Nodes": [],
+        "Left": -390.90423733514149,
+        "Top": 615.98234511863006,
+        "Width": 0.0,
+        "Height": 0.0,
+        "FontSize": 36.0,
+        "InitialTop": 0.0,
+        "InitialHeight": 0.0,
+        "TextblockHeight": 0.0,
+        "Background": "#FFC1D676"
+      }
+    ],
+    "X": 286.20921690467611,
+    "Y": -50.826661472889725,
+    "Zoom": 0.71732242643580912
+  }
+}
