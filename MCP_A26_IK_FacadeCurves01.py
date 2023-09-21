@@ -14,7 +14,7 @@ clr.AddReference("RevitServices")
 from RevitServices.Persistence import DocumentManager
 from RevitServices.Transactions import TransactionManager
 
-### this script gen
+### this script generates, well, something.
 
 class FloorSelectionFilter(ISelectionFilter):
 	"""Selection filter that allows only elements with "Floors" category name"""
